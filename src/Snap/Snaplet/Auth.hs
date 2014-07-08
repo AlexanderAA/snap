@@ -28,6 +28,10 @@ module Snap.Snaplet.Auth
   , currentUser
   , isLoggedIn
 
+  -- * Higher Level Handler Functions
+  , createUserIO
+  , usernameExistsIO
+
   -- * Lower Level Functions
   , markAuthSuccess
   , markAuthFail
@@ -77,6 +81,7 @@ module Snap.Snaplet.Auth
 ------------------------------------------------------------------------------
 import Snap.Snaplet.Auth.AuthManager
 import Snap.Snaplet.Auth.Handlers
+import Snap.Snaplet.Auth.HandlersIO
 import Snap.Snaplet.Auth.SpliceHelpers
 import Snap.Snaplet.Auth.Types
 
