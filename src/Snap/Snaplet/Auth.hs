@@ -31,6 +31,7 @@ module Snap.Snaplet.Auth
   -- * Higher Level Handler Functions
   , createUserIO
   , usernameExistsIO
+  , authenticatePasswordIO
 
   -- * Lower Level Functions
   , markAuthSuccess

@@ -57,6 +57,43 @@ usernameExistsIO :: IAuthBackend r => r
                  -> IO Bool
 usernameExistsIO r username = isJust <$> lookupByLogin r username
 
+
+
+
+------------------------------------------------------------------------------
+-- | Check password for a given user.
+--
+-- Returns "Nothing" if check is successful and an "IncorrectPassword" error
+-- otherwise
+--
+authenticatePasswordIO :: AuthUser          -- ^ Looked up from the back-end
+                       -> ByteString        -- ^ Check against this password
+                       -> Maybe AuthFailure
+authenticatePasswordIO u _pw = auth
+  where
+    pw      = ClearText _pw
+    auth    = case userPassword u of
+                Nothing -> Just PasswordMissing
+                Just upw -> check $ checkPassword pw upw
+
+    check b = if b then Nothing else Just IncorrectPassword
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 {-
 ------------------------------------------------------------------------------
 -- | Lookup a user by her username, check given password and perform login
@@ -317,41 +354,9 @@ getRememberToken :: (Serialize t, MonadSnap m)
 getRememberToken sk rc rp = getSecureCookie rc sk rp
 
 
-------------------------------------------------------------------------------
-setRememberToken :: (Serialize t, MonadSnap m)
-                 => Key
-                 -> ByteString
-                 -> Maybe Int
-                 -> t
-                 -> m ()
-setRememberToken sk rc rp token = setSecureCookie rc sk rp token
 
 
-------------------------------------------------------------------------------
-forgetRememberToken :: MonadSnap m => ByteString -> m ()
-forgetRememberToken rc = expireCookie rc (Just "/")
 
-
-------------------------------------------------------------------------------
--- | Set the current user's 'UserId' in the active session
---
-setSessionUserId :: UserId -> Handler b SessionManager ()
-setSessionUserId (UserId t) = setInSession "__user_id" t
-
-
-------------------------------------------------------------------------------
--- | Remove 'UserId' from active session, effectively logging the user out.
-removeSessionUserId :: Handler b SessionManager ()
-removeSessionUserId = deleteFromSession "__user_id"
-
-
-------------------------------------------------------------------------------
--- | Get the current user's 'UserId' from the active session
---
-getSessionUserId :: Handler b SessionManager (Maybe UserId)
-getSessionUserId = do
-  uid <- getFromSession "__user_id"
-  return $ liftM UserId uid
 
 
 ------------------------------------------------------------------------------
