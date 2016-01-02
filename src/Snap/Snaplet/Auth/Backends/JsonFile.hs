@@ -1,8 +1,8 @@
+{-# LANGUAGE CPP                  #-}
+{-# LANGUAGE FlexibleInstances    #-}
+{-# LANGUAGE OverloadedStrings    #-}
+{-# LANGUAGE TypeOperators        #-}
 {-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE FlexibleInstances #-}
-
 
 module Snap.Snaplet.Auth.Backends.JsonFile
   ( initJsonFileAuthManager
@@ -10,11 +10,10 @@ module Snap.Snaplet.Auth.Backends.JsonFile
   ) where
 
 
-import           Control.Applicative
 import           Control.Monad.State
 import           Control.Concurrent.STM
 import           Data.Aeson
-import qualified Data.Attoparsec as Atto
+import qualified Data.Attoparsec.ByteString as Atto
 import qualified Data.ByteString.Lazy as LB
 import qualified Data.ByteString as B
 import qualified Data.Map as HM
@@ -25,6 +24,10 @@ import qualified Data.Text as T
 import           Data.Time
 import           Web.ClientSession
 import           System.Directory
+
+#if !MIN_VERSION_base(4,8,0)
+import           Control.Applicative
+#endif
 
 import           Snap.Snaplet
 import           Snap.Snaplet.Auth.Types
@@ -57,6 +60,7 @@ initJsonFileAuthManager s l db = do
                        , activeUser            = Nothing
                        , minPasswdLen          = asMinPasswdLen s
                        , rememberCookieName    = asRememberCookieName s
+                       , rememberCookieDomain  = Nothing
                        , rememberPeriod        = asRememberPeriod s
                        , siteKey               = key
                        , lockout               = asLockout s
@@ -312,5 +316,3 @@ instance FromJSON UserCache where
       <*> v .: "tokenCache"
       <*> v .: "uidCounter"
   parseJSON _ = error "Unexpected JSON input"
-
-

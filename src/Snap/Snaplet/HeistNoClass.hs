@@ -21,7 +21,7 @@ module Snap.Snaplet.HeistNoClass
   , heistInit'
   , heistReloader
   , setInterpreted
-  , getCurHeistConfig 
+  , getCurHeistConfig
   , clearHeistCache
 
   , addTemplates
@@ -63,7 +63,6 @@ module Snap.Snaplet.HeistNoClass
 import           Prelude hiding ((.), id)
 import           Control.Applicative
 import           Control.Category
-import           Control.Error
 import           Control.Lens
 import           Control.Monad.Reader
 import           Control.Monad.State
@@ -72,7 +71,7 @@ import qualified Data.ByteString.Char8 as B
 import           Data.DList (DList)
 import qualified Data.HashMap.Strict as Map
 import           Data.IORef
-import           Data.Monoid
+import           Data.Maybe
 import qualified Data.Text as T
 import           Data.Text.Encoding
 import           System.FilePath.Posix
@@ -80,6 +79,10 @@ import           Heist
 import qualified Heist.Compiled as C
 import qualified Heist.Interpreted as I
 import           Heist.Splices.Cache
+
+#if !MIN_VERSION_base(4,8,0)
+import           Data.Monoid
+#endif
 
 import           Snap.Snaplet
 import           Snap.Snaplet.Heist.Internal
@@ -158,7 +161,7 @@ heistInit' templateDir initialConfig =
 -- versions directly, then this value will not be checked and you will get the
 -- mode implemented by the function you called.
 setInterpreted :: Snaplet (Heist b) -> Initializer b v ()
-setInterpreted h = 
+setInterpreted h =
     liftIO $ atomicModifyIORef (_heistConfig $ view snapletValue h)
         (\(hc,_) -> ((hc,Interpreted),()))
 
@@ -195,7 +198,7 @@ addTemplatesAt h urlPrefix templateDir = do
                      (T.unpack $ decodeUtf8 urlPrefix)
         addPrefix = addTemplatePathPrefix
                       (encodeUtf8 $ T.pack fullPrefix)
-    ts <- liftIO $ runEitherT (loadTemplates templateDir) >>=
+    ts <- liftIO $ (loadTemplates templateDir) >>=
                    either (error . concat) return
     printInfo $ T.pack $ unwords
         [ "...adding"
@@ -205,10 +208,10 @@ addTemplatesAt h urlPrefix templateDir = do
         , "with route prefix"
         , fullPrefix ++ "/"
         ]
-    let locations = [liftM addPrefix $ loadTemplates templateDir]
-        hc' = mempty { hcTemplateLocations = locations }
-    liftIO $ atomicModifyIORef (_heistConfig $ view snapletValue h)
-        (\(hc,dm) -> ((hc `mappend` hc', dm), ()))
+    let locations = [fmap addPrefix <$> loadTemplates templateDir]
+        add (hc, dm) =
+          ((over hcTemplateLocations (mappend locations) hc, dm), ())
+    liftIO $ atomicModifyIORef (_heistConfig $ view snapletValue h) add
 
 
 getCurHeistConfig :: Snaplet (Heist b)
@@ -219,7 +222,7 @@ getCurHeistConfig h = case view snapletValue h of
         return hc
     Running _ _ _ _ ->
         error "Can't get HeistConfig after heist is initialized."
-    
+
 
 ------------------------------------------------------------------------------
 getHeistState :: SnapletLens (Snaplet b) (Heist b)
@@ -232,7 +235,7 @@ modifyHeistState' :: SnapletLens (Snaplet b) (Heist b)
                   -> (HeistState (Handler b b) -> HeistState (Handler b b))
                   -> Initializer b v ()
 modifyHeistState' heist f = do
-    withTop' heist $ addPostInitHook $ return . changeState f
+    withTop' heist $ addPostInitHook $ return . Right . changeState f
 
 
 ------------------------------------------------------------------------------
@@ -263,15 +266,17 @@ withHeistState heist f = withHeistState' (subSnaplet heist) f
 -- there.  This is the preferred method for adding all four kinds of splices
 -- as well as new templates.
 addConfig :: Snaplet (Heist b)
-          -> HeistConfig (Handler b b)
+          -> SpliceConfig (Handler b b)
           -> Initializer b v ()
-addConfig h hc = case view snapletValue h of
+addConfig h sc = case view snapletValue h of
     Configuring ref ->
-        liftIO $ atomicModifyIORef ref
-                   (\(hc1,dm) -> ((hc1 `mappend` hc, dm), ()))
+        liftIO $ atomicModifyIORef ref add
     Running _ _ _ _ -> do
         printInfo "finalLoadHook called while running"
         error "this shouldn't happen"
+  where
+    add (hc, dm) =
+      ((over hcSpliceConfig (`mappend` sc) hc, dm), ())
 
 
                             -----------------------
@@ -475,5 +480,3 @@ renderWithSplices :: SnapletLens b (Heist b)
                   -> Handler b v ()
 renderWithSplices heist t splices =
     renderWithSplices' (subSnaplet heist) t splices
-
-

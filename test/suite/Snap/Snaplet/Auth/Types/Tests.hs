@@ -3,28 +3,23 @@ module Snap.Snaplet.Auth.Types.Tests (
   ) where
 
 ------------------------------------------------------------------------------
-import           Control.DeepSeq                      (deepseq)
-import           Control.Exception                    (SomeException, try)
+import           Control.Exception                    (SomeException, evaluate, try)
 import           Control.Monad                        (liftM)
-import           Data.Aeson                           (decode, eitherDecode,
-                                                       encode)
+import           Data.Aeson                           (decode, eitherDecode, encode)
 import qualified Data.ByteString                      as BS
 import qualified Data.ByteString.Lazy.Char8           as BSL
 import qualified Data.Text                            as T
 import           Data.Text.Encoding                   (encodeUtf8)
 import           Data.Time
-import           Test.HUnit                           hiding (Test)
 import           Test.Framework                       (Test, testGroup)
 import           Test.Framework.Providers.HUnit       (testCase)
 import           Test.Framework.Providers.QuickCheck2 (testProperty)
+import           Test.HUnit                           hiding (Test)
 import qualified Test.QuickCheck                      as QC
 import qualified Test.QuickCheck.Monadic              as QCM
 ------------------------------------------------------------------------------
 import qualified Snap.Snaplet.Auth                    as A
-import           Snap.TestCommon                      (eqTestCase,
-                                                       ordTestCase,
-                                                       readTestCase,
-                                                       showTestCase)
+import           Snap.TestCommon                      (eqTestCase, ordTestCase, readTestCase, showTestCase)
 
 
 ------------------------------------------------------------------------------
@@ -51,7 +46,7 @@ tests = testGroup "Auth type tests" [
   , testCase     "Test AuthFailure Show instance"  $
     showTestCase A.BackendError
 --  , testCase     "Test AuthFailure Read instance"  $
---    readTestCase BackendError -- TODO/NOTE: show . read isn't id for 
+--    readTestCase BackendError -- TODO/NOTE: show . read isn't id for
   , testCase     "Test AuthFailure Ord instance"   $
     ordTestCase A.BackendError A.DuplicateLogin
   , testCase     "Test UserId Show instance"       $
@@ -69,14 +64,16 @@ tests = testGroup "Auth type tests" [
 dontSerializeClearText :: Assertion
 dontSerializeClearText = do
   let s = encode (A.ClearText "passwordisnthamster")
-  r <- try $ s `deepseq` return s
+  -- Take the length of the ByteString to force it completely, rather than
+  -- using deepseq; BSL.ByteString lacked an NFData instance until
+  -- bytestring-0.10.
+  r <- try $ evaluate (BSL.length s) >> return s
   case r of
     Left  e -> (e :: SomeException) `seq` return ()
     Right j -> assertFailure $
                "Failed to reject ClearText password serialization: "
                ++ show j
-
-
+ 
 ------------------------------------------------------------------------------
 sampleUserJson :: T.Text -> T.Text -> T.Text
 sampleUserJson reqPair optPair = T.intercalate "," [
@@ -109,14 +106,14 @@ deserializeDefaultRoles =
   either
   (\e -> assertFailure $ "Failed user deserialization: " ++ e)
   (\u -> assertEqual "Roles wasn't initialized to empty" [] (A.userRoles u))
-  (eitherDecode . BSL.fromStrict . encodeUtf8 $
+  (eitherDecode . BSL.fromChunks . (:[]) . encodeUtf8 $
    sampleUserJson "\"activated_at\":null" "\"extra\":null")
 
 
 ------------------------------------------------------------------------------
 failDeserialize :: Assertion
 failDeserialize = do
-  case decode . BSL.fromStrict . encodeUtf8 $ t of
+  case decode . BSL.fromChunks . (:[]) . encodeUtf8 $ t of
     Nothing -> return ()
     Just a  -> assertFailure $
                "Expected deserialization failure, got authUser: "

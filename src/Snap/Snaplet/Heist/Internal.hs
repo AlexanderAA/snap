@@ -2,7 +2,6 @@
 module Snap.Snaplet.Heist.Internal where
 
 import           Prelude
-import           Control.Error
 import           Control.Lens
 import           Control.Monad.State
 import qualified Data.HashMap.Strict as Map
@@ -54,7 +53,10 @@ gHeistInit serve templateDir = do
                   ]
         return hs
   where
-    defaultConfig = mempty { hcLoadTimeSplices = defaultLoadTimeSplices }
+    sc = set scLoadTimeSplices defaultLoadTimeSplices mempty
+    defaultConfig = emptyHeistConfig & hcSpliceConfig .~ sc
+                                     & hcNamespace .~ ""
+                                     & hcErrorNotBound .~ True
 
 
 ------------------------------------------------------------------------------
@@ -66,7 +68,7 @@ heistInitWorker :: FilePath
 heistInitWorker templateDir initialConfig = do
     snapletPath <- getSnapletFilePath
     let tDir = snapletPath </> templateDir
-    templates <- liftIO $ runEitherT (loadTemplates tDir) >>=
+    templates <- liftIO $ (loadTemplates tDir) >>=
                           either (error . concat) return
     printInfo $ T.pack $ unwords
         [ "...loaded"
@@ -74,8 +76,8 @@ heistInitWorker templateDir initialConfig = do
         , "templates from"
         , tDir
         ]
-    let config = initialConfig `mappend`
-                 mempty { hcTemplateLocations = [loadTemplates tDir] }
+    let config = over hcTemplateLocations (<> [loadTemplates tDir])
+                      initialConfig
     ref <- liftIO $ newIORef (config, Compiled)
 
     -- FIXME This runs after all the initializers, but before post init
@@ -87,14 +89,22 @@ heistInitWorker templateDir initialConfig = do
 ------------------------------------------------------------------------------
 -- | Hook that converts the Heist type from Configuring to Running at the end
 -- of initialization.
-finalLoadHook :: Heist b -> EitherT Text IO (Heist b)
+finalLoadHook :: Heist b -> IO (Either Text (Heist b))
 finalLoadHook (Configuring ref) = do
-    (hc,dm) <- lift $ readIORef ref
-    (hs,cts) <- toTextErrors $ initHeistWithCacheTag hc
-    return $ Running hc hs cts dm
+    (hc,dm) <- readIORef ref
+    res <- liftM toTextErrors $ initHeistWithCacheTag hc
+    return $ case res of
+      Left e -> Left e
+      Right (hs,cts) -> Right $ Running hc hs cts dm
   where
-    toTextErrors = bimapEitherT (T.pack . intercalate "\n") id
-finalLoadHook (Running _ _ _ _) = left "finalLoadHook called while running"
+    toTextErrors = mapBoth (T.pack . intercalate "\n") id
+finalLoadHook (Running _ _ _ _) =
+    return $ Left "finalLoadHook called while running"
+
+
+mapBoth :: (a -> c) -> (b -> d) -> Either a b -> Either c d
+mapBoth f _ (Left x)  = Left (f x)
+mapBoth _ f (Right x) = Right (f x)
 
 
 ------------------------------------------------------------------------------
@@ -106,10 +116,8 @@ finalLoadHook (Running _ _ _ _) = left "finalLoadHook called while running"
 heistReloader :: Handler b (Heist b) ()
 heistReloader = do
     h <- get
-    ehs <- liftIO $ runEitherT $ initHeist $ _masterConfig h
+    ehs <- liftIO $ initHeist $ _masterConfig h
     either (writeText . T.pack . unlines)
            (\hs -> do writeText "Heist reloaded."
                       modifyMaster $ set heistState hs h)
            ehs
-
-

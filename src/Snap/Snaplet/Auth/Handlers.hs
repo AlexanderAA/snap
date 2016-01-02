@@ -11,9 +11,10 @@ module Snap.Snaplet.Auth.Handlers where
 
 ------------------------------------------------------------------------------
 import           Control.Applicative
-import           Control.Error
 import           Control.Monad.State
+import           Control.Monad.Trans.Maybe
 import           Data.ByteString (ByteString)
+import           Data.Maybe
 import           Data.Serialize hiding (get)
 import           Data.Time
 import           Data.Text.Encoding (decodeUtf8)
@@ -67,18 +68,20 @@ loginByUsername _ (Encrypted _) _ = return $ Left EncryptedPassword
 loginByUsername unm pwd shouldRemember = do
     sk <- gets siteKey
     cn <- gets rememberCookieName
+    cd <- gets rememberCookieDomain
     rp <- gets rememberPeriod
-    withBackend $ loginByUsername' sk cn rp
+    withBackend $ loginByUsername' sk cn cd rp
 
   where
     --------------------------------------------------------------------------
     loginByUsername' :: (IAuthBackend t) =>
                         Key
                      -> ByteString
+                     -> Maybe ByteString
                      -> Maybe Int
                      -> t
                      -> Handler b (AuthManager b) (Either AuthFailure AuthUser)
-    loginByUsername' sk cn rp r =
+    loginByUsername' sk cn cd rp r =
         liftIO (lookupByLogin r unm) >>=
         maybe (return $! Left UserNotFound) found
 
@@ -93,7 +96,7 @@ loginByUsername unm pwd shouldRemember = do
                   token <- gets randomNumberGenerator >>=
                            liftIO . randomToken 64
 
-                  setRememberToken sk cn rp token
+                  setRememberToken sk cn cd rp token
 
                   let user' = user {
                                 userRememberToken = Just (decodeUtf8 token)
@@ -114,14 +117,15 @@ loginByRememberToken = withBackend $ \impl -> do
     cookieName_ <- gets rememberCookieName
     period      <- gets rememberPeriod
 
-    runEitherT $ do
-        token <- noteT (AuthError "loginByRememberToken: no remember token") $
-                   MaybeT $ getRememberToken key cookieName_ period
-        user  <- noteT (AuthError "loginByRememberToken: no remember token") $
-                   MaybeT $ liftIO $ lookupByRememberToken impl
-                                   $ decodeUtf8 token
-        lift $ forceLogin user
-        return user
+    res <- runMaybeT $ do
+        token <- MaybeT $ getRememberToken key cookieName_ period
+        MaybeT $ liftIO $ lookupByRememberToken impl $ decodeUtf8 token
+    case res of
+      Nothing -> return $ Left $ AuthError
+                   "loginByRememberToken: no remember token"
+      Just user -> do
+        forceLogin user
+        return $ Right user
 
 
 ------------------------------------------------------------------------------
@@ -132,7 +136,8 @@ logout = do
     s <- gets session
     withTop s $ withSession s removeSessionUserId
     rc <- gets rememberCookieName
-    forgetRememberToken rc
+    rd <- gets rememberCookieDomain
+    expireSecureCookie rc rd
     modify $ \mgr -> mgr { activeUser = Nothing }
 
 
@@ -144,7 +149,7 @@ currentUser = cacheOrLookup $ withBackend $ \r -> do
     s   <- gets session
     uid <- withTop s getSessionUserId
     case uid of
-      Nothing -> hush <$> loginByRememberToken
+      Nothing -> either (const Nothing) Just <$> loginByRememberToken
       Just uid' -> liftIO $ lookupByUserId r uid'
 
 
@@ -319,15 +324,11 @@ getRememberToken sk rc rp = getSecureCookie rc sk rp
 setRememberToken :: (Serialize t, MonadSnap m)
                  => Key
                  -> ByteString
+                 -> Maybe ByteString
                  -> Maybe Int
                  -> t
                  -> m ()
-setRememberToken sk rc rp token = setSecureCookie rc sk rp token
-
-
-------------------------------------------------------------------------------
-forgetRememberToken :: MonadSnap m => ByteString -> m ()
-forgetRememberToken rc = expireCookie rc (Just "/")
+setRememberToken sk rc rd rp token = setSecureCookie rc rd sk rp token
 
 
 ------------------------------------------------------------------------------
@@ -398,8 +399,8 @@ registerUser lf pf = do
     l <- fmap decodeUtf8 <$> getParam lf
     p <- getParam pf
 
-    let l' = note UsernameMissing l
-    let p' = note PasswordMissing p
+    let l' = maybe (Left UsernameMissing) Right l
+    let p' = maybe (Left PasswordMissing) Right p
 
     -- In case of multiple AuthFailure, the first available one
     -- will be propagated.
@@ -431,29 +432,28 @@ loginUser
       -- ^ Upon success
   -> Handler b (AuthManager b) ()
 loginUser unf pwdf remf loginFail loginSucc =
-    runEitherT (loginUser' unf pwdf remf)
-    >>= either loginFail (const loginSucc)
+    loginUser' unf pwdf remf >>= either loginFail (const loginSucc)
 
 
 ------------------------------------------------------------------------------
 loginUser' :: ByteString
            -> ByteString
            -> Maybe ByteString
-           -> EitherT AuthFailure (Handler b (AuthManager b)) AuthUser
+           -> Handler b (AuthManager b) (Either AuthFailure AuthUser)
 loginUser' unf pwdf remf = do
-    mbUsername <- lift $ getParam unf
-    mbPassword <- lift $ getParam pwdf
-    remember   <- lift $ liftM (fromMaybe False)
+    mbUsername <- getParam unf
+    mbPassword <- getParam pwdf
+    remember   <- liftM (fromMaybe False)
                     (runMaybeT $
                     do field <- MaybeT $ return remf
                        value <- MaybeT $ getParam field
                        return $ value == "1" || value == "on")
 
-    password <- noteT PasswordMissing $ hoistMaybe mbPassword
-    username <- noteT UsernameMissing $ hoistMaybe mbUsername
-
-    EitherT $ loginByUsername (decodeUtf8 username)
-                              (ClearText password) remember
+    case mbUsername of
+      Nothing -> return $ Left UsernameMissing
+      Just u -> case mbPassword of
+        Nothing -> return $ Left PasswordMissing
+        Just p -> loginByUsername (decodeUtf8 u) (ClearText p) remember
 
 
 ------------------------------------------------------------------------------
@@ -497,7 +497,7 @@ withBackend ::
       -- ^ The function to run with the handler.
   -> Handler b (AuthManager v) a
 withBackend f = join $ do
-  (AuthManager backend_ _ _ _ _ _ _ _ _) <- get
+  (AuthManager backend_ _ _ _ _ _ _ _ _ _) <- get
   return $ f backend_
 
 

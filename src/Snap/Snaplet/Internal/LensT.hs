@@ -12,7 +12,7 @@ module Snap.Snaplet.Internal.LensT where
 import           Control.Applicative         (Alternative (..),
                                               Applicative (..))
 import           Control.Category            ((.))
-import           Control.Lens.Loupe          (ALens', cloneLens, storing, (^#))
+import           Control.Lens                (ALens', cloneLens, storing, (^#))
 import           Control.Monad               (MonadPlus (..))
 import           Control.Monad.Base          (MonadBase (..))
 import           Control.Monad.Reader        (MonadReader (..))
@@ -24,7 +24,7 @@ import           Control.Monad.Trans.Control (ComposeSt, MonadBaseControl (..),
                                               defaultLiftWith, defaultRestoreM,
                                               defaultRestoreT)
 import           Prelude                     (Functor (..), Monad (..), const,
-                                              seq, ($), ($!))
+                                              ($), ($!))
 import           Snap.Core                   (MonadSnap (..))
 import           Snap.Snaplet.Internal.RST   (RST (..), runRST, withRST)
 ------------------------------------------------------------------------------
@@ -52,17 +52,17 @@ instance MonadBase bs m => MonadBase bs (LensT b v s m) where
 
 
 instance MonadBaseControl bs m => MonadBaseControl bs (LensT b v s m) where
-     newtype StM (LensT b v s m) a = StMLens {unStMLens :: ComposeSt (LensT b v s) m a}
-     liftBaseWith = defaultLiftBaseWith StMLens
-     restoreM = defaultRestoreM unStMLens
+     type StM (LensT b v s m) a = ComposeSt (LensT b v s) m a
+     liftBaseWith = defaultLiftBaseWith
+     restoreM = defaultRestoreM
      {-# INLINE liftBaseWith #-}
      {-# INLINE restoreM #-}
 
 
 instance MonadTransControl (LensT b v s) where
-    newtype StT (LensT b v s) a = StLensT {unStLensT :: StT (RST (ALens' b v) s) a}
-    liftWith = defaultLiftWith LensT (\(LensT rst) -> rst) StLensT
-    restoreT = defaultRestoreT LensT unStLensT
+    type StT (LensT b v s) a = StT (RST (ALens' b v) s) a
+    liftWith = defaultLiftWith LensT (\(LensT rst) -> rst)
+    restoreT = defaultRestoreT LensT
     {-# INLINE liftWith #-}
     {-# INLINE restoreT #-}
 

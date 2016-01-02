@@ -1,4 +1,5 @@
 ------------------------------------------------------------------------------
+{-# LANGUAGE CPP                        #-}
 {-# LANGUAGE DeriveDataTypeable         #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
@@ -8,10 +9,9 @@ module Snap.Snaplet.Session.Backends.CookieSession
     ) where
 
 ------------------------------------------------------------------------------
-import           Control.Applicative
 import           Control.Monad.Reader
 import           Data.ByteString                     (ByteString)
-import           Data.Generics
+import           Data.Typeable
 import           Data.HashMap.Strict                 (HashMap)
 import qualified Data.HashMap.Strict                 as HM
 import           Data.Serialize                      (Serialize)
@@ -20,6 +20,10 @@ import           Data.Text                           (Text)
 import           Data.Text.Encoding
 import           Snap.Core                           (Snap)
 import           Web.ClientSession
+
+#if !MIN_VERSION_base(4,8,0)
+import           Control.Applicative
+#endif
 ------------------------------------------------------------------------------
 import           Snap.Snaplet
 import           Snap.Snaplet.Session
@@ -78,6 +82,10 @@ data CookieSessionManager = CookieSessionManager {
         -- ^ A long encryption key used for secure cookie transport
     , cookieName            :: ByteString
         -- ^ Cookie name for the session system
+    , cookieDomain          :: Maybe ByteString
+        -- ^ Cookie domain for session system. You may want to set it to
+        -- dot prefixed domain name like ".example.com", so the cookie is
+        -- available to sub domains.
     , timeOut               :: Maybe Int
         -- ^ Session cookies will be considered "stale" after this many
         -- seconds.
@@ -88,7 +96,7 @@ data CookieSessionManager = CookieSessionManager {
 
 ------------------------------------------------------------------------------
 loadDefSession :: CookieSessionManager -> IO CookieSessionManager
-loadDefSession mgr@(CookieSessionManager ses _ _ _ rng) =
+loadDefSession mgr@(CookieSessionManager ses _ _ _ _ rng) =
     case ses of
       Nothing -> do ses' <- mkCookieSession rng
                     return $! mgr { session = Just ses' }
@@ -109,22 +117,23 @@ modSession f (CookieSession t ses) = CookieSession t (f ses)
 initCookieSessionManager
     :: FilePath             -- ^ Path to site-wide encryption key
     -> ByteString           -- ^ Session cookie name
+    -> Maybe ByteString     -- ^ Session cookie domain
     -> Maybe Int            -- ^ Session time-out (replay attack protection)
     -> SnapletInit b SessionManager
-initCookieSessionManager fp cn to =
+initCookieSessionManager fp cn dom to =
     makeSnaplet "CookieSession"
                 "A snaplet providing sessions via HTTP cookies."
                 Nothing $ liftIO $ do
         key <- getKey fp
         rng <- liftIO mkRNG
-        return $! SessionManager $ CookieSessionManager Nothing key cn to rng
+        return $! SessionManager $ CookieSessionManager Nothing key cn dom to rng
 
 
 ------------------------------------------------------------------------------
 instance ISessionManager CookieSessionManager where
 
     --------------------------------------------------------------------------
-    load mgr@(CookieSessionManager r _ _ _ _) =
+    load mgr@(CookieSessionManager r _ _ _ _ _) =
         case r of
           Just _ -> return mgr
           Nothing -> do
@@ -138,7 +147,7 @@ instance ISessionManager CookieSessionManager where
                   Right cs -> return $ mgr { session = Just cs }
 
     --------------------------------------------------------------------------
-    commit mgr@(CookieSessionManager r _ _ _ rng) = do
+    commit mgr@(CookieSessionManager r _ _ _ _ rng) = do
         pl <- case r of
                 Just r' -> return . Payload $ S.encode r'
                 Nothing -> liftIO (mkCookieSession rng) >>=
@@ -154,25 +163,25 @@ instance ISessionManager CookieSessionManager where
     touch = id
 
     --------------------------------------------------------------------------
-    insert k v mgr@(CookieSessionManager r _ _ _ _) = case r of
+    insert k v mgr@(CookieSessionManager r _ _ _ _ _) = case r of
         Just r' -> mgr { session = Just $ modSession (HM.insert k v) r' }
         Nothing -> mgr
 
     --------------------------------------------------------------------------
-    lookup k (CookieSessionManager r _ _ _ _) = r >>= HM.lookup k . csSession
+    lookup k (CookieSessionManager r _ _ _ _ _) = r >>= HM.lookup k . csSession
 
     --------------------------------------------------------------------------
-    delete k mgr@(CookieSessionManager r _ _ _ _) = case r of
+    delete k mgr@(CookieSessionManager r _ _ _ _ _) = case r of
         Just r' -> mgr { session = Just $ modSession (HM.delete k) r' }
         Nothing -> mgr
 
     --------------------------------------------------------------------------
-    csrf (CookieSessionManager r _ _ _ _) = case r of
+    csrf (CookieSessionManager r _ _ _ _ _) = case r of
         Just r' -> csCSRFToken r'
         Nothing -> ""
 
     --------------------------------------------------------------------------
-    toList (CookieSessionManager r _ _ _ _) = case r of
+    toList (CookieSessionManager r _ _ _ _ _) = case r of
         Just r' -> HM.toList . csSession $ r'
         Nothing -> []
 
@@ -192,5 +201,5 @@ getPayload mgr = getSecureCookie (cookieName mgr) (siteKey mgr) (timeOut mgr)
 ------------------------------------------------------------------------------
 -- | Set the client-side value
 setPayload :: CookieSessionManager -> Payload -> Snap ()
-setPayload mgr x = setSecureCookie (cookieName mgr) (siteKey mgr)
-                                   (timeOut mgr) x
+setPayload mgr x = setSecureCookie (cookieName mgr) (cookieDomain mgr)
+                                   (siteKey mgr) (timeOut mgr) x
